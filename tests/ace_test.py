@@ -7,7 +7,8 @@ from delphin.codecs import simplemrs
 import ace
 
 ace.install()
-parse_output = ace.parse('this is a foo bar sentence.', onlyMRS=True, bestparse=True)
+parse_output = ace.parse('this is a foo bar sentence.', 
+                         onlyMRS=True, bestparse=True)
 print(parse_output)
 print
 m = simplemrs.loads_one(parse_output)
