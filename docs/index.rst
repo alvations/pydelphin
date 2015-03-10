@@ -6,14 +6,36 @@
 Welcome to pyDelphin's documentation!
 =====================================
 
-Contents:
+The pyDelphin project aims to facilitate research and work with
+`DELPH-IN <http://delph-in.net>`_ formalisms. There are three main tiers
+to pyDelphin's functionality:
+
+ 1. Serialization/Deserialization of DELPH-IN formalisms
+ 2. A data model and API for DELPH-IN data structures
+ 3. Commandline tools for basic operations
+
+pyDelphin does *not* aim to do heavy tasks like parsing or generation.
+Rather, it helps those who want to work with the *results* of tasks like
+parsing or generation. It has been used for refreshing [incr tsdb()]
+profiles to new schemas, converting MRS formalisms, extracting features
+for sentiment classification, and more.
+
+
+Currently there are two packages of pyDelphin:
 
 .. toctree::
    :glob:
-   :maxdepth: 3
+   :maxdepth: 2
 
-   api/*
+   api/delphin.itsdb
+   api/delphin.mrs
 
+.. additional info
+   setup
+   tutorial
+   pyDelphin
+   api
+   
 
 Indices and tables
 ==================

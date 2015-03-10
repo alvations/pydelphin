@@ -1,5 +1,6 @@
 
 from itertools import count
+from delphin.mrs.query import get_outbound_args
 
 def dump(fh, ms, single=False, pretty_print=True, color=False, **kwargs):
     print(dumps(ms,
@@ -36,17 +37,17 @@ def serialize(ms, pretty_print=True, color=False, **kwargs):
             ed_list=''.join(
                 ed.format(
                     membership=connected,  # if m.is_connected(ep.nodeid)?
-                    id=ep.cv if not ep.is_quantifier() else next(q_ids),
-                    pred=ep.pred.short_form,
+                    id=ep.iv if not ep.is_quantifier() else next(q_ids),
+                    pred=ep.pred.short_form(),
                     lnk=str(ep.lnk),
                     carg=carg.format(constant=ep.carg) if ep.carg else '',
                     dep_list=(
                         ', '.join(
                             dep.format(argname=a.argname, value=a.value)
-                            for a in m.get_outbound_args(ep.nodeid,
-                                                         allow_unbound=False)
+                            for a in get_outbound_args(m, ep.nodeid,
+                                                       allow_unbound=False)
                         ) if not ep.is_quantifier() else
-                        dep.format(argname='BV', value=ep.cv)
+                        dep.format(argname='BV', value=ep.iv)
                     ),
                     delim=delim
                 )

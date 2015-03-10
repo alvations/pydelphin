@@ -10,17 +10,14 @@
 
 from collections import OrderedDict
 from io import BytesIO
-from delphin.mrs import (Mrs, ElementaryPredication, Argument, Pred,
-                         MrsVariable, Lnk, HandleConstraint)
-from delphin._exceptions import MrsDecodeError
-from delphin.mrs.config import (GRAMMARPRED, STRINGPRED, REALPRED,
-                                CVARG, CONSTARG)
+from delphin.mrs import Mrs
+from delphin.mrs.components import (
+    ElementaryPredication, Argument, Pred, MrsVariable, Lnk, HandleConstraint
+)
+from delphin._exceptions import XmrsDeserializationError as XDE
+from delphin.mrs.config import IVARG_ROLE
 
-# Import LXML if available, otherwise fall back to another etree implementation
-try:
-    from lxml import etree
-except ImportError:
-    import xml.etree.ElementTree as etree
+import xml.etree.ElementTree as etree
 
 ##############################################################################
 ##############################################################################
@@ -89,8 +86,8 @@ def decode_mrs(elem):
     global _vars
     _vars = {}
     # normalize_vars(elem) # try to make all vars have a sort
-    return Mrs(ltop=decode_label(elem.find('label')),
-               index=decode_var(elem.find('var')),
+    return Mrs(hook=Hook(ltop=decode_label(elem.find('label')),
+                         index=decode_var(elem.find('var'))),
                rels=list(map(decode_ep, elem.iter('ep'))),
                hcons=list(map(decode_hcons, elem.iter('hcons'))),
                lnk=decode_lnk(elem.get('cfrom'), elem.get('cto')),
@@ -115,8 +112,8 @@ def decode_var(elem, sort=None):
     props = decode_extrapairs(elem.iter('extrapair'))
     if vid in _vars:
         if srt != _vars[vid].sort:
-            raise MrsDecodeError('Variable {}{} has a conflicting sort with {}'
-                                 .format(srt, vid, str(_vars[vid])))
+            raise XDE('Variable {}{} has a conflicting sort with {}'
+                      .format(srt, vid, str(_vars[vid])))
         _vars[vid].properties.update(props)
     else:
         _vars[vid] = MrsVariable(vid=vid, sort=srt, properties=props)
@@ -167,19 +164,17 @@ def decode_pred(elem):
 
 def decode_args(elem):
     # <!ELEMENT fvpair (rargname, (var|constant))>
-    # cv is the characteristic variable (probably ARG0, given by CVARG)
-    # carg is the constant arg (e.g. a quoted string; given by CONSTARG)
+    # iv is the intrinsic variable (probably ARG0, given by IVARG_ROLE)
+    # carg is the constant arg (e.g. a quoted string; given by CONSTARG_ROLE)
     # This code assumes that only cargs have constant values, and all
-    # other args (including CVs) have var values.
+    # other args (including IVs) have var values.
     args = []
     for e in elem.findall('fvpair'):
         argname = e.find('rargname').text.upper()
         if e.find('constant') is not None:
-            # argtype = CONSTANTARG
             argval = e.find('constant').text
         elif e.find('var') is not None:
             argval = decode_var(e.find('var'))
-            # argtype = HOLE_ARG if argval.sort == HANDLESORT else VARIABLEARG
         args.append(Argument.mrs_argument(argname, argval))
     return args
 
@@ -277,8 +272,8 @@ def encode_ep(ep, listed_vars):
     e = etree.Element('ep', attrib=attributes)
     e.append(encode_pred(ep.pred))
     e.append(encode_label(ep.label))
-    if ep.cv is not None:
-        e.append(encode_arg(CVARG, encode_variable(ep.cv, listed_vars)))
+    if ep.iv is not None:
+        e.append(encode_arg(IVARG_ROLE, encode_variable(ep.iv, listed_vars)))
     for arg in ep.args:
         if isinstance(arg.value, MrsVariable):
             e.append(encode_arg(arg.argname,
@@ -290,13 +285,13 @@ def encode_ep(ep, listed_vars):
 
 def encode_pred(pred):
     p = None
-    if pred.type == GRAMMARPRED:
+    if pred.type == Pred.GRAMMARPRED:
         p = etree.Element('pred')
         p.text = pred.string
-    elif pred.type == STRINGPRED:
+    elif pred.type == Pred.STRINGPRED:
         p = etree.Element('spred')
         p.text = pred.string
-    elif pred.type == REALPRED:
+    elif pred.type == Pred.REALPRED:
         attributes = {'lemma': pred.lemma, 'pos': pred.pos}
         if pred.sense is not None:
             attributes['sense'] = pred.sense

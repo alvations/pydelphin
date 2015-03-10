@@ -22,15 +22,21 @@ class XmrsDeserializationError(XmrsError):
 class XmrsStructureError(XmrsError):
     pass
 
+class TdlError(PyDelphinException):
+    pass
 
-class MrsDecodeError(XmrsError):
-
-    def __init__(self, msg):
-        self.msg = msg
+class TdlParsingError(TdlError):
+    def __init__(self, *args, filename=None, line_number=None, identifier=None,
+                 **kwargs):
+        TdlError.__init__(self, *args, **kwargs)
+        self.filename = filename
+        self.line_number = line_number
+        self.identifier = identifier
 
     def __str__(self):
-        return self.msg
-
-    def __repr__(self):
-        return self.__str__()
-        
+        return 'At {}:{} ({})\n{}'.format(
+            self.filename or '?',
+            self.line_number or '?',
+            self.identifier or 'type/rule definition',
+            TdlError.__str__(self)
+        )

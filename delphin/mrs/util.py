@@ -1,6 +1,8 @@
 from itertools import chain, combinations
 from operator import itemgetter
-from networkx import DiGraph
+from networkx import DiGraph, relabel_nodes
+from delphin._exceptions import XmrsStructureError
+
 
 first = itemgetter(0)
 second = itemgetter(1)
@@ -48,6 +50,22 @@ def dict_of_dicts(triples, dicttype=dict):
     return d
 
 
+# used for getting variable properties
+class ReadOnceDict(dict):
+    def __getitem__(self, key):
+        val = dict.__getitem__(self, key)
+        del self[key]
+        return val
+
+    def get(self, key, default=None):
+        if key in self:
+            val = dict.__getitem__(self, key)
+            del self[key]
+        else:
+            val = default
+        return val
+
+
 # adapted from recipe in itertools documentation
 def powerset(iterable):
     s = list(iterable)
@@ -58,12 +76,53 @@ class XmrsDiGraph(DiGraph):
         DiGraph.__init__(self, data=data, name=name, attr=attr)
         self.nodeids = [] if data is None else data.nodeids
         self.labels = set([] if data is None else data.labels)
+        self.refresh()
+
+    def refresh(self):
+        seen = set()
+        for nid in self.nodeids:
+            n = self.node[nid]
+            if n.get('iv') is not None:
+                iv = n['iv']
+                if iv not in self.node:
+                    raise XmrsStructureError(
+                        'Intrinsic variable ({}) of node {} is missing from '
+                        'the Xmrs graph.'
+                        .format(iv, nid)
+                    )
+                # clear the first time
+                if iv not in seen:
+                    self.node[iv]['bv'] = None
+                    self.node[iv]['iv'] = None
+                    seen.add(iv)
+                if n['pred'].is_quantifier():
+                    self.add_edge(iv, nid, {'bv': True})  # quantifier
+                    self.node[iv]['bv'] = nid
+                else:
+                    self.add_edge(iv, nid, {'iv': True})  # intrinsic arg
+                    self.node[iv]['iv'] = nid
+
 
     def subgraph(self, nbunch):
         nbunch = list(nbunch)
         sg = DiGraph.subgraph(self, nbunch)
         node = sg.node
-        sg.nodeids = [nid for nid in nbunch if 'ep' in node[nid]]
+        sg.nodeids = [nid for nid in nbunch if 'pred' in node[nid]]
         sg.labels = set(node[nid]['label'] for nid in nbunch
                         if 'label' in node[nid])
-        return XmrsDiGraph(sg)
+        g = XmrsDiGraph(sg)
+        g.refresh()
+        return g
+
+
+    def relabel_nodes(self, mapping):
+        g = relabel_nodes(self, mapping)
+        # also need to fix where we store it ourselves
+        for tnid in mapping.values():
+            iv = g.node[tnid]['iv']
+            if iv is not None:
+                v = 'bv' if g.node[tnid]['pred'].is_quantifier() else 'iv'
+                g.node[iv][v] = tnid
+        g.nodeids = [mapping.get(n, n) for n in self.nodeids]
+        g.labels = set(self.labels)
+        return XmrsDiGraph(data=g)

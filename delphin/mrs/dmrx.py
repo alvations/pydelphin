@@ -13,14 +13,9 @@ from collections import OrderedDict
 from io import BytesIO
 import re
 from delphin.mrs import (Dmrs, Node, Link, Pred, Lnk)
-from delphin.mrs.config import (GRAMMARPRED, STRINGPRED, REALPRED,
-                                QUANTIFIER_SORT)
+from delphin.mrs.config import QUANTIFIER_SORT
 
-# Import LXML if available, otherwise fall back to another etree implementation
-try:
-    from lxml import etree
-except ImportError:
-    import xml.etree.ElementTree as etree
+import xml.etree.ElementTree as etree
 
 ##############################################################################
 ##############################################################################
@@ -147,8 +142,8 @@ def decode_link(elem):
     # <!ELEMENT post (#PCDATA)>
     return Link(start=elem.get('from'),
                 end=elem.get('to'),
-                argname=elem.find('rargname').text,
-                post=elem.find('post').text)
+                argname=getattr(elem.find('rargname'), 'text', None),
+                post=getattr(elem.find('post'), 'text', None))
 
 
 def decode_lnk(elem):
@@ -213,10 +208,10 @@ def encode_node(node):
 
 
 def encode_pred(pred):
-    if pred.type == GRAMMARPRED:
+    if pred.type == Pred.GRAMMARPRED:
         e = etree.Element('gpred')
         e.text = pred.string.strip('"\'')
-    elif pred.type in (REALPRED, STRINGPRED):
+    elif pred.type in (Pred.REALPRED, Pred.STRINGPRED):
         attributes = {}
         if pred.lemma is not None:
             attributes['lemma'] = pred.lemma

@@ -1,285 +1,445 @@
+import pdb
 import re
-from collections import deque
+from collections import deque, defaultdict
 from itertools import product
-from .pred import is_valid_pred_string
+from .components import Pred
 from .util import powerset
+from delphin._exceptions import XmrsError
 
-# Something like this:
-#
-# Start              = OrPathExpr
-# OrPathExpr         = AndPathExpr ("|" AndPathExpr)*
-# AndPathExpr        = PathExpr ("&" PathExpr)*
-# PathExpr           = Path (ExprOp Value)?
-# ExprOp             = "=" | "is"
-# Value              = Path | String | "_"
-# Path               = PathGroup | TopPath | EPPath
-# PathGroup          = "(" OrPathExpr ")"
-# TopPath            = TopVar (PathOp EPPath)?
-# TopVar             = "LTOP" | "INDEX"
-# PathOp             = "/" | "%" | "^" | "~"
-# EPPath             = EP EPCondition? EPComponents?
-# EP                 = Pred | "#" NodeIdOrAnchor | "*"
-# NodeIdOrAnchor     = NodeId | Anchor
-# EPCondition        = "[" OrEPComponentExpr "]"
-# EPComponents       = EPComponentGroup | EPComponent
-# EPComponentGroup   = "(" OrEPComponentExpr ")"
-# OrEPComponentExpr  = AndEPComponentExpr ("|" AndEPComponentExpr)*
-# AndEPComponentExpr = EPComponentExpr ("&" EPComponentExpr)*
-# EPComponentExpr    = (EPComponent | Path) (ExprOp Value)?
-# EPComponent        = ArgPath | Property
-# ArgPath            = ":" ArgName (PathOp (EPPath | PathGroup))?
-# ArgName            = "*" | String
-# Property           = "@" PropName
-# PropName           = "*" | String
+TOP = 'TOP'
 
-# also empty input; check separately
-_path_end_tokens = set([')', ']', '|', '&'])
-_top_vars = set(['LTOP', 'INDEX'])
-_expression_operators = set(['=', 'is'])
-_non_pred_toks = set([':', '/', '%', '^', '~', '@', ')',
-                      '[', ']', '=', '&', '|'])  # '('
-
-tokenizer = re.compile(
-    r'\s*("[^"\\]*(?:\\.[^"\\]*)*"|'  # quoted strings
-    r'[^\s*#:/%^~@()\[\]=&|]+|'       # non-breaking characters
-    r'[*#:/%^~@()\[\]=&|])\s*'        # meaningful punctuation
-)
-
-
-def tokenize(path):
-    """Split the path into tokens."""
-    return tokenizer.findall(path)
-
-
-def walk(xmrs, path):
-    # for now path is space separated
-    path_tokens = path.split()
-
-
-def traverse(xmrs, path):
-    steps = deque(tokenize(path))
-    objs = _traverse_disjunction(xmrs, xmrs, steps, _traverse_pathexpr)
-    if steps:
-        raise Exception('Unconsumed MrsPath steps: {}'.format(''.join(steps)))
-    return objs
-
-
-# _traverse_disjunction and _traverse_conjunction are general-purpose,
-# and thus need a traverser argument, which says what they are
-# disjoining and conjoining
-def _traverse_disjunction(xmrs, obj, steps, traverser, context=None):
-    objs = _traverse_conjunction(xmrs, obj, steps, traverser, context)
-    while steps and steps[0] == '|':
-        steps.popleft()  # get rid of '|'
-        objs.extend(_traverse_conjunction(xmrs, obj, steps, traverser,
-                                          context))
-    return objs
-
-
-def _traverse_conjunction(xmrs, obj, steps, traverser, context=None):
-    objs = traverser(xmrs, obj, steps, context)
-    # &-ops can fail early, since all must evaluate to True to be
-    # used, but we can't short-circuit conjunction unless we know how
-    # many steps to remove from the queue, so just parse them for now
-    while steps and steps[0] == '&':
-        steps.popleft()  # get rid of '&'
-        objs2 = traverser(xmrs, obj, steps, context)
-        if objs and objs2:
-            objs.extend(objs2)
-        else:
-            objs = []
-    return objs
-
-
-def _traverse_pathexpr(xmrs, obj, steps, context=None):
-    # PathExpr = Path (ExprOp Value)?
-    objs = _traverse_path(xmrs, obj, steps, context)
-    if steps and steps[0] in _expression_operators:
-        values = _traverse_value(xmrs, obj, steps, context)
-        if step == '=':
-            return objs == values
-        elif step == 'is':
-            raise NotImplementedError
-    return objs
-
-
-def _traverse_path(xmrs, obj, steps, context=None):
-    # Path = PathGroup | TopPath | EPPath
-    if steps[0] == '(':
-        return _traverse_pathgroup(xmrs, obj, steps, context=obj)
-    elif steps[0].upper() in _top_vars:
-        return _traverse_toppath(xmrs, obj, steps, context)
-    else:
-        return _traverse_eppath(xmrs, obj, steps, context)
-
-
-def _traverse_pathgroup(xmrs, obj, steps, context=None):
-    # PathGroup = "(" OrPathExpr ")"
-    steps.popleft()  # remove '('
-    objs = _traverse_disjunction(xmrs, obj, steps, _traverse_pathexpr,
-                                 context)
-    steps.popleft()  # remove ')'
-
-
-def _traverse_toppath(xmrs, obj, steps, context=None):
-    # TopPath = TopVar (PathOp EPPath)?
-    # TopVar = "LTOP" | "INDEX"
-    step = steps.popleft().upper()
-    if step == 'LTOP':
-        raise NotImplementedError
-    elif step == 'INDEX':
-        raise NotImplementedError
-
-
-def _traverse_eppath(xmrs, obj, steps, context=None):
-    # EPPath = EP EPCondition? EPComponents?
-    # EP = Pred | "#" NodeIdOrAnchor | "*"
-    # NodeIdOrAnchor = NodeId | Anchor
-    eps = _traverse_ep(xmrs, obj, steps, context)
-
-    if steps and step[0] == '[':
-        eps = list(filter())
-    if steps and step[0] == '(':
-        pass
-
-
-def _traverse_ep(xmrs, obj, steps, context=None):
-    step = steps.popleft()
-    if step == '*':
-        eps = xmrs.nodes
-    elif step == '#':
-        nid = steps.popleft()
-        eps = xmrs.select_nodes(nodeid=nid)
-    elif is_valid_pred_string(step, suffix_required=False):
-        eps = xmrs.select_nodes(pred=step)
-    else:
-        raise Exception("Invalid ep: {}".format(''.join([step] + steps)))
-
-
-def _traverse_arg(xmrs, obj, steps):
-    pass
-    if step in (')', ']'):
-        pass
-        #    return objs
-        #    elif step == '[':
-        #    if traverse(xmrs, curobj, steps):
-        #        objs.append(curobj)
-    elif step == ':':
-        member = steps[1]
-        obj = obj.get_member()
-    elif step == '/':
-        pass
-    elif step == '%':
-        pass
-    elif step == '^':
-        pass
-    elif step == '~':
-        pass
-    elif step == '':
-        pass
-
-
-def find(xmrs, path):
-    pass
-
-# GENERATING PATHS #########################################################
+class XmrsPathError(XmrsError): pass
 
 class XmrsPath(object):
-    def __init__(self, path, preds):
-        self.path = path
-        self.preds = tuple(sorted(preds or []))
 
-    def __str__(self):
-        return self.path
+    __slots__ = ('start', '_depth', '_distance', '_preds')
 
+    def __init__(self, startnode):
+        self.start = startnode
+        self.calculate_metrics()
 
-def explore_paths(xmrs):
-    if xmrs.ltop is None:
-        raise Exception('Cannot explore without an LTOP')
-    ltop_nodeid = xmrs.find_scope_head(xmrs.ltop)
-    return _explore_paths(xmrs, ltop_nodeid, [])
+    def calculate_metrics(self):
+        self._distance = {}
+        self._depth = {}
+        self._preds = {}
+        self._calculate_metrics(self.start, 0, 0)
 
-def _explore_paths(xmrs, nodeid, visited):
-    args = [tuple([a.argname] + list(get_arg_op_and_target(xmrs, a)))
-            for a in xmrs.get_outbound_args(nodeid, allow_unbound=False)]
-    argstr = ('{}' if len(args) == 1 else '({})').format(' & '.join(
-        ':{}{}'.format(name, op) for name, op, tgt in args
-    ))
-    return ['{}{}'.format(str(xmrs.get_ep(nodeid).pred), argstr)]
+    def _calculate_metrics(self, curnode, depth, distance):
+        if curnode is None:
+            return
+        # add pred index
+        try:
+            self._preds[curnode.pred].append(curnode)
+        except KeyError:
+            self._preds[curnode.pred] = []
+            self._preds[curnode.pred].append(curnode)
+        _id = id(curnode)
+        # we may re-update if we're on a shorter path
+        updated = False
+        if _id not in self._distance or distance < self._distance[_id]:
+            self._distance[_id] = distance
+            updated = True
+        if _id not in self._depth or abs(depth) < abs(self._depth[_id]):
+            self._depth[_id] = depth
+            updated = True
+        if not updated:
+            return
+        for link in curnode.links:
+            if link.endswith('>'):
+                self._calculate_metrics(curnode[link], depth+1, distance+1)
+            elif link.startswith('<'):
+                self._calculate_metrics(curnode[link], depth-1, distance+1)
+            else:
+                self._calculate_metrics(curnode[link], depth, distance+1)
 
+    def copy(self):
+        return XmrsPath(self.start.copy())
 
-def get_paths(xmrs, **kwargs):
-    for nid in xmrs.nodeids:
-        for (eppath, preds) in get_ep_paths(xmrs, nid, **kwargs):
-            yield XmrsPath(eppath, preds)
-
-
-def get_ep_paths(xmrs, nid, path=None, max_depth=-1, allow_bare_args=False):
-    # ep[argpaths]
-    if max_depth == 0:
-        raise StopIteration
-    pred = xmrs.get_pred(nid)
-    path = '{}{}'.format(path or '', pred.short_form)
-    args = xmrs.get_outbound_args(nid, allow_unbound=False)
-    for argset in powerset(args):
-        numargs = len(argset)
-        if numargs == 0:
-            yield (path, [pred])
+    def distance(self, node=None):
+        if node is None:
+            return max(self._distance.values())
         else:
-            arg_path_conj = get_arg_path_conj(
-                xmrs, argset, path=path,
-                max_depth=max_depth,
-                allow_bare_args=allow_bare_args
-            )
-            for (subpath, subpreds) in arg_path_conj:
-                yield (subpath, [pred] + subpreds)
+            return self._distance[id(node)]
+
+    def depth(self, node=None, direction=max):
+        if node is None:
+            return direction(self._depth.values())
+        return self._depth[id(node)]
+
+    def select(self, pred):
+        return self._preds.get(pred, [])
+
+    def find(self, pred):
+        if pred not in self._preds:
+            return []
+        return find(self.start, pred)
+
+    def follow(self, connectors):
+        node = self.start
+        connectors = list(reversed(connectors))
+        while connectors:
+            node = node[connectors.pop()]
+        return node
+
+    def extend(self, extents):
+        for connectors, extent in extents:
+            # the final connector may be new information
+            tgt = self.follow(connectors[:-1])
+            if connectors:
+                subtgt = tgt.links.get(connectors[-1])
+                if subtgt is None:
+                    tgt.links[connectors[-1]] = extent
+                    continue
+                else:
+                    tgt = subtgt
+            tgt.update(extent)
+        self.calculate_metrics()
 
 
-def get_arg_path_conj(xmrs, args, path=None,
-                      max_depth=-1,
-                      allow_bare_args=False):
-    # :argpath or (:argpath [& :argpath]*)
-    if allow_bare_args:
-        yield join_subpaths(path, [':{}'.format(arg.argname) for arg in args])
-    # beware of magic below:
-    # first, get_subpaths is a function that gets subpaths for an arg
-    get_subpaths = lambda x: list(get_arg_paths(xmrs, x, max_depth=max_depth))
-    # then map that function on all args, and get all combinations of
-    # the subpaths with itertools.product.
-    subpath_sets = product(*list(map(get_subpaths, args)))
-    print(list(subpath_sets))
-    for subpaths, subpreds in subpath_sets:
-        yield (join_subpaths(path, [':{}'.format(sp) for sp in subpaths]),
-               subpreds)
+class XmrsPathNode(object):
+
+    __slots__ = ('nodeid', 'pred', 'links')
+
+    def __init__(self, nodeid, pred, links=None):
+        self.nodeid = nodeid
+        self.pred = pred
+        self.links = dict(links or [])
+
+    def __getitem__(self, key):
+        return self.links[key]
+
+    def __iter__(self):
+        return iter(self.links.items())
+
+    def copy(self):
+        n = XmrsPathNode(self.nodeid, self.pred)
+        for connector, tgt in self.links.items():
+            n.links[connector] = tgt.copy() if tgt is not None else tgt
+        return n
+
+    def update(self, other):
+        self.nodeid = other.nodeid or self.nodeid
+        self.pred = other.pred or self.pred
+        for connector, tgt in other.links.items():
+            if not self.links.get(connector):
+                self.links[connector] = tgt
+            else:
+                self[connector].update(tgt)
 
 
-def join_subpaths(basepath, subpaths, joiner=' & '):
-    if len(subpaths) == 1:
-        pathstring = '{}{}'
-    elif len(subpaths) > 1:
-        pathstring = '{}({})'
+# HELPER FUNCTIONS ##########################################################
+
+def get_nodeids(path):
+    yield path.nodeid
+    for link, path_node in path:
+        if path_node is None:
+            continue
+        for nid in get_nodeids(path_node):
+            yield nid
+
+
+def get_preds(path):
+    yield path.pred
+    for link, path_node in path:
+        if path_node is None:
+            continue
+        for pred in get_preds(path_node):
+            yield pred
+
+
+def link_is_directed(link):
+    return bool(link.argname) or link.post != 'EQ'
+
+
+def headed(connector):
+    # quantifiers and X/EQ links are not the heads of their subgraphs
+    if connector == '<RSTR/H:' or connector.endswith('/EQ:'):
+        return True
+    if (connector == ':RSTR/H>' or
+            connector.endswith('/EQ>') or
+            connector.startswith('<')):
+        return False
+    return True
+
+
+def connector_sort(connector):
+    return (
+        not connector.endswith('>'),  # forward links first
+        not connector.startswith('<'),  # then backward, then undirected
+        not connector[1:].startswith('LBL'),  # LBL before other args
+        connector[1:].startswith('BODY'),  # BODY last
+        connector[1:]  # otherwise alphabetical
+    )
+
+
+# WRITING PATHS #############################################################
+
+def format(node, sort_key=connector_sort, trailing_connectors='usually'):
+    if isinstance(node, XmrsPath):
+        node = node.start
+    return _format(
+        node, sort_key=sort_key, trailing_connectors=trailing_connectors
+    )
+
+def _format(node, sort_key=connector_sort, trailing_connectors='usually'):
+    if node is None:
+        return ''
+    #if node.nodeid is not None:
+    #    symbol = '#{}'.format(node.nodeid)
+    if node.pred is not None:
+        symbol = str(node.pred)
     else:
-        raise ValueError("There must be more than one subpath.")
-    return pathstring.format(basepath or '', joiner.join(subpaths))
+        symbol = '*'
+    links = []
+    connectors = node.links.keys()
+    if sort_key:
+        connectors = sorted(connectors, key=sort_key)
+    for conn in connectors:
+        tgt = node.links[conn]
+        if (tgt or
+            trailing_connectors == 'always' or
+            (trailing_connectors == 'usually' and conn != ':/EQ:') or
+            (trailing_connectors == 'forward' and conn.endswith('>')) or
+            (trailing_connectors == 'backward' and conn.startswith('<'))):
+
+            links.append(
+                '{}{}'.format(
+                    conn,
+                    _format(
+                        tgt,
+                        sort_key=sort_key,
+                        trailing_connectors=trailing_connectors
+                    )
+                )
+            )
+    if len(links) > 1:
+        subpath = '({})'.format(' & '.join(links))
+    else:
+        subpath = ''.join(links)  # possibly just ''
+    return '{}{}'.format(symbol, subpath)
 
 
-def get_arg_paths(xmrs, arg, max_depth=-1):
-    op, tgtnid = get_arg_op_and_target(xmrs, arg)
-    yield '{}{}'.format(arg.argname, op)
-    for eppath in get_ep_paths(xmrs, tgtnid, max_depth=max_depth-1):
-        yield '{}{}{}'.format(arg.argname, op, eppath)
+
+# FINDING PATHS #############################################################
+
+def walk(
+        xmrs,
+        startnode=None,
+        method='top-down',
+        allow_eq=False,
+        max_distance=-1):
+    if method not in ('top-down', 'bottom-up', 'headed'):
+        raise XmrsPathError("Invalid path-finding method: {}".format(method))
+    if startnode is None:
+        startnode = 0  # TOP
+    links = _build_linkdict(xmrs, allow_eq)
+    agenda = deque()
+    seen = {}
 
 
-def get_arg_op_and_target(xmrs, arg):
-    op = tgtnid = None
-    get_label = xmrs.get_label
-    if arg.value in xmrs._cv_to_nid:
-        tgtnid = xmrs._cv_to_nid[arg.value]
-        op = '%' if get_label(arg.nodeid) == get_label(tgtnid) else '/'
-    elif arg.value in xmrs._label_to_nids:
-        tgtnid = xmrs.find_scope_head(arg.value)
-        op = '^'
-    elif arg.value in xmrs._var_to_hcons:
-        tgtnid = xmrs.find_scope_head(arg.value)
-        op = '~'
-    return op, tgtnid
+
+
+def _walk(xmrs, startnode, method, allow_eq, max_distance): pass
+
+def find_paths(
+        xmrs,
+        nodeids=None,
+        method='top-down',
+        allow_eq=False,
+        max_distance=-1):
+    if method not in ('top-down', 'bottom-up', 'headed'):
+        raise XmrsPathError("Invalid path-finding method: {}".format(method))
+    if nodeids is None: nodeids = [0] + xmrs.nodeids  # 0 for TOP
+    links = _build_linkdict(xmrs, allow_eq)
+
+    paths = defaultdict(list)
+    for nid in nodeids:
+        if nid in paths: continue  # maybe already visited in _find_paths
+        for path in _find_paths(
+                xmrs, nid, links, set(), method=method,
+                max_distance=max_distance):
+            paths[path.nodeid].append(XmrsPath(path))
+
+    for nid in nodeids:
+        for path in sorted(paths.get(nid, []), key=lambda p: p.distance()):
+            yield path
+
+def _build_linkdict(xmrs, allow_eq):
+    links = defaultdict(dict)
+    for link in xmrs.links:
+        connector = '{}/{}'.format(link.argname or '', link.post)
+        if link_is_directed(link):
+            links[link.start][':{}>'.format(connector)] = link.end
+            links[link.end]['<{}:'.format(connector)] = link.start
+        elif allow_eq:
+            links[link.start][':{}:'.format(connector)] = link.end
+            #links[link.end][':{}:'.format(connector)] = link.start
+    return links
+
+def _find_paths(
+        xmrs,
+        nodeid,
+        links,
+        seen,
+        method='top-down',
+        max_distance=-1):
+    if method not in ('top-down', 'bottom-up', 'headed'):
+        raise XmrsPathError("Invalid path-finding method: {}".format(method))
+    #if nodeid in seen  # currently not working
+    if max_distance == 0: return None
+    seen.add(nodeid)
+
+    symbol = TOP if nodeid == 0 else xmrs.get_pred(nodeid)
+    local_links = links.get(nodeid, {})
+    connectors = _get_connectors(method, local_links)
+    # first just use the unfilled connectors if not TOP
+    if nodeid != 0:
+        yield XmrsPathNode(nodeid, symbol, links=connectors)
+
+    if connectors:
+        #pdb.set_trace()
+        subpaths = {}
+        for connector in connectors:
+            tgtnid = local_links[connector]
+            if tgtnid == 0:
+                subpaths[connector] = [XmrsPathNode(tgtnid, TOP)]
+            else:
+                subpaths[connector] = list(
+                    _find_paths(
+                        xmrs, tgtnid, links, seen, method=method,
+                        max_distance=max_distance-1,
+                    )
+                )
+        # beware of magic below:
+        #   links maps a connector (like ARG1/NEQ) to a list of subpaths.
+        #   This gets the product of subpaths for all connectors, then remaps
+        #   the connector to the appropriate subpaths. E.g. if links is like
+        #   {':ARG1/NEQ>': [def], ':ARG2/NEQ>': [ghi, jkl]} then lds is like
+        #   [{':ARG1/NEQ>': def, 'ARG2/NEQ>': ghi},
+        #    {':ARG1/NEQ>': def, 'ARG2/NEQ>': jkl}]
+        lds = map(
+            lambda z: dict(zip(subpaths.keys(), z)),
+            product(*subpaths.values())
+        )
+        for ld in lds:
+            yield XmrsPathNode(nodeid, symbol, links=ld)
+
+def _get_connectors(method, links):
+    # top-down: :X/Y> or :X/Y: (the latter only if added)
+    if method == 'top-down':
+        return dict((c, None) for c in links if c.startswith(':'))
+    elif method == 'bottom-up':
+        return dict((c, None) for c in links if c.endswith(':'))
+    elif method == 'headed':
+        return dict((c, None) for c in links if headed(c))
+
+
+# READING PATHS #############################################################
+
+tokenizer = re.compile(
+    r'(?P<dq_string>"[^"\\]*(?:\\.[^"\\]*)*")'  # quoted strings
+    r"|(?P<sq_string>'[^ \\]*(?:\\.[^ \\]*)*)"  # single-quoted 'strings
+    r'|(?P<fwd_connector>:[^/]*/(?:EQ|NEQ|HEQ|H)>)'  # :X/Y> connector
+    r'|(?P<bak_connector><[^/]*/(?:EQ|NEQ|HEQ|H):)'  # <X/Y: connector
+    r'|(?P<und_connector>:[^/]*/(?:EQ|NEQ|HEQ|H):)'  # :X/Y: connector
+    r'|(?P<symbol>[^\s*:/><@()\[\]=&|]+)'  # non-breaking characters
+    r'|(?P<punc>[*()&|])'  # meaningful punctuation
+)
+
+def read_path(path_string):
+    toks = deque((mo.lastgroup, mo.group())
+                 for mo in tokenizer.finditer(path_string))
+    try:
+        startnode = _read_node(toks)
+    except IndexError:
+        raise XmrsPathError('Unexpected termination for path: {}'
+            .format(path_string))
+    if startnode is None:
+        raise XmrsPathError('Error reading path: {}'
+            .format(path_string))
+    elif toks:
+        raise XmrsPathError('Unconsumed tokens: {}'
+            .format(', '.join(tok[1] for tok in toks)))
+    path = XmrsPath(startnode)
+    return path
+
+def _read_node(tokens):
+    if not tokens: return None
+    mtype, mtext = tokens.popleft()
+    if mtype in ('dq_string', 'sq_string', 'symbol'):
+        links = _read_links(tokens)
+        return XmrsPathNode(
+            None,
+            Pred.stringpred(mtext),
+            links
+        )
+    else:
+        tokens.appendleft((mtype, mtext))  # put it back
+    return None  # current position isn't a path node
+
+def _read_links(tokens):
+    if not tokens: return None
+    mtype, mtext = tokens.popleft()
+    if mtype in ('fwd_connector', 'bak_connector', 'und_connector'):
+        return {mtext: _read_node(tokens)}
+    elif mtext == '(':
+        links = {}
+        mtype, mtext = tokens.popleft()
+        while mtext != ')':
+            links[mtext] = _read_node(tokens)
+            mtype, mtext = tokens.popleft()
+            if mtext in ('&', '|'):
+                mtype, mtext = tokens.popleft()
+            elif mtext != ')':
+                raise XmrsPathError('Unexpected token: {}'.format(mtext))
+        return links
+    else:
+        tokens.appendleft((mtype, mtext))  # put it back
+    return None  # not a link
+
+
+# SEARCHING PATHS ###########################################################
+
+
+def find(node, pred, connectors=[]):
+    matches = []
+    if node and node.pred == pred:
+        matches.append((connectors, node))
+    for connector, tgt in node.links.items():
+        if not tgt:
+            continue
+        for match in find(tgt, pred, connectors + [connector]):
+            matches.append(match)
+    return matches
+
+
+def find_extents(node1, node2):
+    exts = []
+    for (connectors, first_node) in find(node1, node2.pred):
+        for (ext_connections, ext) in extents(first_node, node2):
+            exts.append((connectors + ext_connections, ext))
+    return exts
+
+
+def extents(node1, node2):
+    assert node1.pred == node2.pred
+    exts = []
+    # if a constraint is violated, raise XmrsPathError
+    # if a constraint exists on node1 and node2, dive
+    # if one is on node1 but not node2, ignore
+    # if one is on node2 but not node1, return
+    for connector, tgt2 in node2.links.items():
+        if connector in node1.links:
+            tgt1 = node1.links[connector]
+            if tgt2 is None:
+                continue
+            elif tgt1 is None:
+                exts.append(([connector], tgt2))
+            elif tgt1.pred == tgt2.pred:
+                for connectors, ext in extents(tgt1, tgt2):
+                    exts.append(([connector] + connectors, ext))
+            else:
+                raise XmrsPathError('Incompatible paths.')
+        else:
+            exts.append(([connector], tgt2))
+    return exts
